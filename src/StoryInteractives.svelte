@@ -10,6 +10,7 @@
      * @property {string} industry
      * @property {string} suburb_id
      * @property {string} suburb
+     * @property {number} [Total]
      * @property {number} [Non employing]
      * @property {number} [1-4 Employees]
      * @property {number} [5-19 Employees]
@@ -19,70 +20,121 @@
 
     /** @type {HTMLDivElement | undefined} */
     let mapContainer = undefined;
-
     /** @type {maplibregl.Map | null} */
     let map = null;
 
-    /** @type {BusinessRow[]} */
-    let businessData = [];
+    // Core Reactive Business State Arrays
+    /**
+     * @type {any[]}
+     */
+    let businessData = $state([]);
+    /**
+     * @type {any[] | null | undefined}
+     */
+    let continuousYears = $state([]);
+    /**
+     * @type {any[] | null | undefined}
+     */
+    let continuousIndustries = $state([]);
 
-    // UI Selection States
-    /** @type {string} */
-    let selectedYear = "2025";
-    /** @type {string} */
-    let selectedIndustry = "Agriculture, Forestry and Fishing";
-    /** @type {string} */
-    let selectedBucket = "1-4 Employees";
+    // Reactive UI Selection Bindings
+    let selectedYear = $state("2025");
+    let selectedIndustry = $state("Accommodation and Food Services");
+    let selectedBucket = $state("All Sizes");
 
-    // Tooltip Interactive State
-    let hoveredSuburbName = "";
-    let hoveredSuburbCount = 0;
-    let tooltipX = 0;
-    let tooltipY = 0;
-    let showTooltip = false;
+    const bucketOptions = [
+        "All Sizes",
+        "Non employing",
+        "1-4 Employees",
+        "5-19 Employees",
+        "20-199 Employees",
+        "200+ Employees",
+    ];
+
+    // Tooltip State Hooks
+    let hoveredSuburbName = $state("");
+    let hoveredSuburbCount = $state(0);
+    let tooltipX = $state(0);
+    let tooltipY = $state(0);
+    let showTooltip = $state(false);
     /** @type {string | number | null} */
     let hoveredFeatureId = null;
 
-    // Configuration (Matching your Mapbox asset layers)
-    const MAPBOX_USERNAME = "atlasgigernzer";
-    const TILESET_ID = "6qx896";
-    const SOURCE_LAYER = "SA2_2021_AUST_SHP_GDA2020";
+    // Fixed Vector Asset Target Constants
+    const TILESET_ID = "atlasgigerenzer.6qx896";
+    const SOURCE_LAYER = "SA2_2021_AUST_SHP_GDA2020.zip-mg2r8x";
 
+    // 1. Reactive Data Filter Node
+    let filteredRecords = $derived(
+        businessData.filter(
+            (d) => d.year === selectedYear && d.industry === selectedIndustry,
+        ),
+    );
+
+    // 2. Automated Editorial Insight Engine
+    let statsSummary = $derived({
+        totalBusinesses: filteredRecords.reduce(
+            (acc, curr) => acc + (curr[selectedBucket] || 0),
+            0,
+        ),
+        topSuburb: filteredRecords.reduce(
+            (max, curr) =>
+                (curr[selectedBucket] || 0) > (max[selectedBucket] || 0)
+                    ? curr
+                    : max,
+            { suburb: "None", [selectedBucket]: 0 },
+        ),
+    });
+
+    // 3. Native Map Pipeline Trigger
+    $effect(() => {
+        if (map && map.isStyleLoaded() && filteredRecords.length > 0) {
+            updateMapFeatures();
+            updateMapData();
+        }
+    });
     onMount(async () => {
         const basePath = import.meta.env.BASE_URL;
         const rawData = await d3.csv(`${basePath}data/business_counts.csv`);
 
-        businessData = rawData.map(
-            (/** @type {Record<string, string | undefined>} */ d) => ({
-                year: String(d.year || ""),
-                industry: String(d.industry || ""),
-                suburb_id: String(d.suburb_id || ""),
-                suburb: String(d.suburb || ""),
-                "Non employing": Number(
-                    (d["Non employing"] || "0").replace(/\s/g, ""),
-                ),
-                "1-4 Employees": Number(
-                    (d["1-4 Employees"] || "0").replace(/\s/g, ""),
-                ),
-                "5-19 Employees": Number(
-                    (d["5-19 Employees"] || "0").replace(/\s/g, ""),
-                ),
-                "20-199 Employees": Number(
-                    (d["20-199 Employees"] || "0").replace(/\s/g, ""),
-                ),
-                "200+ Employees": Number(
-                    (d["200+ Employees"] || "0").replace(/\s/g, ""),
-                ),
-            }),
-        );
+        // Scrub layout strings and sanitize spaces
+        businessData = rawData.map((/** @type {Record<string, string | undefined>} */d) => ({
+            year: String(d.year || ""),
+            industry: String(d.industry || "").replaceAll('"', ""),
+            suburb_id: String(d.suburb_id || ""),
+            suburb: String(d.suburb || ""),
+            "All Sizes": Number((d["Total"] || "0").replace(/\s/g, "")),
+            "Non employing": Number(
+                (d["Non employing"] || "0").replace(/\s/g, ""),
+            ),
+            "1-4 Employees": Number(
+                (d["1-4 Employees"] || "0").replace(/\s/g, ""),
+            ),
+            "5-19 Employees": Number(
+                (d["5-19 Employees"] || "0").replace(/\s/g, ""),
+            ),
+            "20-199 Employees": Number(
+                (d["20-199 Employees"] || "0").replace(/\s/g, ""),
+            ),
+            "200+ Employees": Number(
+                (d["200+ Employees"] || "0").replace(/\s/g, ""),
+            ),
+        }));
+
+        continuousYears = [...new Set(businessData.map((d) => d.year))].sort();
+        continuousIndustries = [
+            ...new Set(businessData.map((d) => d.industry)),
+        ].sort();
+
+        // Map init phase stubbed out here for clarity (Fully written in Part 2)
 
         if (!mapContainer) return;
 
         map = new maplibregl.Map({
             container: mapContainer,
             style: "https://demotiles.maplibre.org/style.json",
-            center: [133.7751, -25.2744],
-            zoom: 4,
+            center: [146, -36],
+            zoom: 6,
         });
 
         map.on("load", () => {
@@ -93,9 +145,13 @@
             map.addSource("suburbs-source", {
                 type: "vector",
                 // Correct Mapbox Web API structure: /v4/username.tileset_id.json
+                url: `https://api.mapbox.com/v4/${TILESET_ID}.json?secure&access_token=${MAPBOX_TOKEN}`,
                 // url: `https://api.mapbox.com/v4/${MAPBOX_USERNAME}.${TILESET_ID}/tilequery/${133.7751},${-25.2744}.json`,
-                url: `https://api.mapbox.com/v4/${MAPBOX_USERNAME}.${TILESET_ID}.json?secure&access_token=${MAPBOX_TOKEN}`,
+                // url: `https://api.mapbox.com/v4/${MAPBOX_USERNAME}.${TILESET_ID}.json?secure&access_token=${MAPBOX_TOKEN}`,
                 // url: `https://mapbox.com/${MAPBOX_USERNAME}.${TILESET_ID}.json?access_token=${MAPBOX_TOKEN}`,
+                promoteId: "SA2_CODE21",
+                minzoom: 0, // Don't waste network requests if zoomed out to a global worldview
+                maxzoom: 22,
             });
 
             map.addLayer({
@@ -103,6 +159,11 @@
                 type: "fill",
                 source: "suburbs-source",
                 "source-layer": SOURCE_LAYER,
+
+                // --- ADD THESE LINES ---
+                minzoom: 4, // Suburbs only fade into view once the user zooms into country-scale [2]
+                maxzoom: 18, // Completely hide the tiles if they zoom past extreme street levels
+
                 paint: {
                     "fill-color": [
                         "case",
@@ -114,9 +175,19 @@
                             0,
                             "#1a2a3a",
                             10,
-                            "#e65c00",
+                            "#ffba7a",
+                            25,
+                            "#ff9257",
+                            50,
+                            "#fe662f",
                             100,
-                            "#ff3333",
+                            "#ef350b",
+                            200,
+                            "#cc0e00",
+                            500,
+                            "#a30000",
+                            1000,
+                            "#7a0000",
                         ],
                         "rgba(40, 40, 40, 0.4)",
                     ],
@@ -235,215 +306,375 @@
                 }
             });
 
-            updateMapData();
+            map.on("sourcedata", (e) => {
+                // Only run when our specific source finishes loading its vector data frames
+                if (e.sourceId === "suburbs-source" && e.isSourceLoaded) {
+                    updateMapData();
+                }
+            });
         });
     });
 
-    $: if (
-        businessData.length > 0 &&
-        map &&
-        map.isStyleLoaded() &&
-        selectedYear &&
-        selectedIndustry &&
-        selectedBucket
-    ) {
-        updateMapData();
+    // Re-run the data join whenever the user changes any dropdown selection
+    //  $effect(() => {
+    //     // Safe check to ensure the data is loaded and the MapLibre canvas style is ready
+    //     if (businessData.length > 0 && map && map.isStyleLoaded()) {
+    //         // Any reactive states read inside here (like selectedYear, selectedBucket) 
+    //         // will automatically trigger this effect when their values change.
+    //         updateMapData();
+    //     }
+    // });
+
+    function updateMapFeatures() {
+        if (!map || !map.isStyleLoaded()) return;
+
+        filteredRecords.forEach((record) => {
+            // @ts-ignore
+            map.setFeatureState(
+                {
+                    source: "suburbs-source",
+                    sourceLayer: SOURCE_LAYER,
+                    id: record.suburb_id,
+                },
+                { count: record[selectedBucket] || 0 },
+            );
+        });
     }
 
     function updateMapData() {
-        if (!map) return;
+        if (!map || !map.isStyleLoaded()) return;
 
+        // 1. Wipe out old data states cleanly to clear previous shapes
+        map.removeFeatureState({
+            source: "suburbs-source",
+            sourceLayer: SOURCE_LAYER,
+        });
+
+        // 2. Filter records down to selected categories
         const currentData = businessData.filter(
             (d) => d.year === selectedYear && d.industry === selectedIndustry,
         );
 
-        // Clear previous settings
-        businessData.forEach((row) => {
-            /** @type {maplibregl.Map} */ (map).setFeatureState(
-                {
-                    source: "suburbs-source",
-                    sourceLayer: SOURCE_LAYER,
-                    id: row.suburb_id,
-                },
-                { count: null },
-            );
-        });
-
-        // Populate current data parameters
+        // 3. Inject matching metrics down to promoted Mapbox feature keys
         currentData.forEach((row) => {
-            const countValue =
-                row[/** @type {keyof BusinessRow} */ (selectedBucket)] || 0;
+            const countValue = Number(
+                row[/** @type {keyof BusinessRow} */ (selectedBucket)] || 0,
+            );
+
+            // Cast ID to number if it is a numeric string to match Mapbox promotedId types
+            const targetId = isNaN(Number(row.suburb_id))
+                ? row.suburb_id
+                : Number(row.suburb_id);
+
             /** @type {maplibregl.Map} */ (map).setFeatureState(
                 {
                     source: "suburbs-source",
                     sourceLayer: SOURCE_LAYER,
-                    id: row.suburb_id,
+                    id: targetId,
                 },
                 { count: countValue },
             );
         });
     }
 </script>
+<main class="article-container">
+    <header></header>
 
-<div class="map-wrap">
-    <!-- Clean Editorial Typography Controls Overlay -->
-    <div class="controls-card">
-        <h3>Filter Business Densities</h3>
+    <!-- Operational Dashboard Grid -->
+    <section class="dashboard-grid">
+        <div class="control-panel">
+            <div class="input-group">
+                <label for="year-select">Reporting Year</label>
+                <select id="year-select" bind:value={selectedYear}>
+                    {#each continuousYears as yr}
+                        <option value={yr}>{yr}</option>
+                    {/each}
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="year-select">Data Year</label>
-            <select id="year-select" bind:value={selectedYear}>
-                <option value="2024">2024</option>
-                <option value="2025">2025</option>
-                <option value="2026">2026</option>
-            </select>
-        </div>
+            <div class="input-group">
+                <label for="industry-select">Industrial Sector</label>
+                <select id="industry-select" bind:value={selectedIndustry}>
+                    {#each continuousIndustries as ind}
+                        <option value={ind}>{ind}</option>
+                    {/each}
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="industry-select">Industry Classification</label>
-            <select id="industry-select" bind:value={selectedIndustry}>
-                <option value="Agriculture, Forestry and Fishing"
-                    >Agriculture, Forestry & Fishing</option
-                >
-                <option value="Retail Trade">Retail Trade</option>
-                <option value="Professional, Scientific and Technical Services"
-                    >Professional & Technical Services</option
-                >
-            </select>
-        </div>
+            <div class="input-group">
+                <label for="bucket-select">Operation Capacity</label>
+                <select id="bucket-select" bind:value={selectedBucket}>
+                    {#each bucketOptions as bkt}
+                        <option value={bkt}>{bkt}</option>
+                    {/each}
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="bucket-select">Employee Bandwidth Size</label>
-            <select id="bucket-select" bind:value={selectedBucket}>
-                <option value="Non employing">Non Employing</option>
-                <option value="1-4 Employees">1–4 Employees</option>
-                <option value="5-19 Employees">5–19 Employees</option>
-                <option value="20-199 Employees">20–199 Employees</option>
-                <option value="200+ Employees">200+ Employees</option>
-            </select>
-        </div>
-    </div>
+            <!-- Scannable Insights Component -->
+            <div class="insights-box">
+                <h3>Quick Insights ({selectedYear})</h3>
+                
+                <div class="kpi-card">
+                    <span class="kpi-label">Total Sector Footprint</span>
+                    <span class="kpi-value">{statsSummary.totalBusinesses.toLocaleString()}</span>
+                    <span class="kpi-subtext">Active entities Nationwide</span>
+                </div>
 
-    <!-- The Map Canvas Box Wrapper Target -->
-    <div bind:this={mapContainer} class="map-container"></div>
-
-    <!-- Interactive Client-side Hover Floating Tooltip Portal -->
-    {#if showTooltip}
-        <div
-            class="floating-tooltip"
-            style="top: {tooltipY}px; left: {tooltipX}px;"
-        >
-            <div class="tooltip-title">{hoveredSuburbName}</div>
-            <div class="tooltip-data-row">
-                <span class="label">{selectedBucket}:</span>
-                <span class="value">{hoveredSuburbCount.toLocaleString()}</span>
+                <div class="kpi-card">
+                    <span class="kpi-label">Top Commercial Hotspot</span>
+                    <span class="kpi-value targeted">{statsSummary.topSuburb.suburb}</span>
+                    <span class="kpi-subtext">
+                        Hosts <strong>{(statsSummary.topSuburb[selectedBucket] || 0).toLocaleString()}</strong> active units
+                    </span>
+                </div>
             </div>
         </div>
-    {/if}
-</div>
+
+        <!-- Main Map Interactive Canvas Wrapper -->
+        <div class="map-wrapper">
+            <div bind:this={mapContainer} class="map-canvas"></div>
+
+            <!-- Dynamic Floating Legend Map Element -->
+            <div class="map-legend">
+                <h4>Active Business Units</h4>
+                <div class="legend-gradient"></div>
+                <div class="legend-labels">
+                    <span>0</span>
+                    <span>15</span>
+                    <span>75</span>
+                    <span>400</span>
+                    <span>1k+</span>
+                </div>
+            </div>
+
+            <!-- Vector Mouse Anchor Tooltip Layer -->
+            {#if showTooltip}
+                <div class="custom-tooltip" style="left: {tooltipX}px; top: {tooltipY}px;">
+                    <div class="tooltip-title">{hoveredSuburbName}</div>
+                    <div class="tooltip-metric">
+                        <span class="metric-number">{hoveredSuburbCount.toLocaleString()}</span>
+                        <span class="metric-unit">Registered Units</span>
+                    </div>
+                    <div class="tooltip-footer">{selectedBucket} • {selectedIndustry}</div>
+                </div>
+            {/if}
+        </div>
+    </section>
+</main>
 
 <style>
-    /* CRITICAL FIX: The elements must dictate absolute height boundaries */
-    .map-wrap {
-        position: relative;
-        width: 100%;
-        height: 75vh; /* Direct vertical height allocation prevents 0px layout compression */
-        min-height: 550px;
+    :global(body) {
+        margin: 0;
         background-color: #0f172a;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-            Helvetica, Arial, sans-serif;
+        color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
 
-    .map-container {
+    .article-container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem;
+    }
+
+
+
+
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: 400px 1fr;
+        gap: 2rem;
+        height: 650px;
+    }
+
+    .control-panel {
+        background-color: #1e293b;
+        padding: 1.5rem;
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        overflow-y: auto;
+    }
+
+    .input-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #94a3b8;
+    }
+
+    select {
+        background-color: #0f172a;
+        color: #f8fafc;
+        border: 1px solid #334155;
+        padding: 0.75rem;
+        border-radius: 6px;
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition: border-color 0.2s;
+    }
+
+    select:focus {
+        outline: none;
+        border-color: #fe662f;
+    }
+
+    .insights-box {
+        margin-top: auto;
+        border-top: 1px solid #334155;
+        padding-top: 1.25rem;
+    }
+
+    .insights-box h3 {
+        font-size: 1rem;
+        margin: 0 0 1rem 0;
+        color: #cbd5e1;
+    }
+
+    .kpi-card {
+        background-color: #0f172a;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .kpi-label {
+        font-size: 0.75rem;
+        color: #64748b;
+        text-transform: uppercase;
+    }
+
+    .kpi-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #f8fafc;
+        margin: 0.25rem 0;
+    }
+
+    .kpi-value.targeted {
+        font-size: 1.15rem;
+        color: #ffba7a;
+    }
+
+    .kpi-subtext {
+        font-size: 0.8rem;
+        color: #94a3b8;
+    }
+
+    .map-wrapper {
+        position: relative;
+        min-width: 600px;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+    }
+
+    .map-canvas {
         width: 100%;
         height: 100%;
     }
 
-    /* Professional Data Journalism Layer Panel Styling Overlay */
-    .controls-card {
+    .map-legend {
         position: absolute;
-        top: 20px;
-        left: 20px;
-        z-index: 5;
+        bottom: 1.5rem;
+        right: 1.5rem;
         background-color: rgba(15, 23, 42, 0.9);
         backdrop-filter: blur(8px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 1rem;
         border-radius: 8px;
-        padding: 16px;
-        width: 280px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-        color: #f8fafc;
-    }
-    .controls-card h3 {
-        margin: 0 0 14px 0;
-        font-size: 1.1rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        padding-bottom: 8px;
-    }
-    .control-group {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        margin-bottom: 12px;
-    }
-    .control-group:last-child {
-        margin-bottom: 0;
-    }
-    .control-group label {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #94a3b8;
-        font-weight: 500;
-    }
-    .control-group select {
-        background-color: #1e293b;
         border: 1px solid #334155;
-        border-radius: 4px;
-        color: #f8fafc;
-        padding: 8px;
-        font-size: 0.85rem;
-        cursor: pointer;
-        transition: border-color 0.2s;
-    }
-    .control-group select:focus {
-        outline: none;
-        border-color: #38bdf8;
-    }
-    /* Interactive Data Tooltip Styling Box*/
-    .floating-tooltip {
-        position: absolute;
-        z-index: 10;
+        width: 220px;
         pointer-events: none;
-        background-color: #ffffff;
-        color: #0f172a;
-        padding: 10px 14px;
-        border-radius: 6px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-        min-width: 150px;
-        font-size: 0.85rem;
-        border: 1px solid #e2e8f0;
     }
+
+    .map-legend h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.8rem;
+        color: #cbd5e1;
+    }
+
+    .legend-gradient {
+        height: 12px;
+        border-radius: 4px;
+        background: linear-gradient(to right, #1a2a3a, #ffba7a, #ff9257, #fe662f, #ef350b, #cc0e00, #a30000, #7a0000);
+    }
+
+    .legend-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.7rem;
+        color: #94a3b8;
+        margin-top: 0.35rem;
+    }
+
+    .custom-tooltip {
+        position: absolute;
+        z-index: 1000;
+        pointer-events: none;
+        background-color: rgba(15, 23, 42, 0.95);
+        border: 1px solid #fe662f;
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        min-width: 180px;
+        transform: translate(5px, 5px);
+        backdrop-filter: blur(4px);
+    }
+
     .tooltip-title {
         font-weight: 700;
         font-size: 0.9rem;
-        margin-bottom: 4px;
-        color: #0f172a;
-        border-bottom: 1px solid #e2e8f0;
-        padding-bottom: 4px;
+        color: #f8fafc;
+        margin-bottom: 0.25rem;
     }
-    .tooltip-data-row {
+
+    .tooltip-metric {
         display: flex;
-        justify-content: space-between;
-        gap: 12px;
+        align-items: baseline;
+        gap: 0.35rem;
     }
-    .tooltip-data-row .label {
+
+    .metric-number {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #fe662f;
+    }
+
+    .metric-unit {
+        font-size: 0.75rem;
+        color: #94a3b8;
+    }
+
+    .tooltip-footer {
+        font-size: 0.65rem;
         color: #64748b;
+        margin-top: 0.5rem;
+        border-top: 1px solid #334155;
+        padding-top: 0.25rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
-    .tooltip-data-row .value {
-        font-weight: 600;
-        color: #0284c7;
+
+    @media (max-width: 1024px) {
+        .dashboard-grid {
+            grid-template-columns: 1fr;
+            height: auto;
+        }
+        .map-wrapper {
+            height: 450px;
+        }
+        .control-panel {
+            height: auto;
+        }
     }
 </style>
+
